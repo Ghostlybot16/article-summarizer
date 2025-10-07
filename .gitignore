@@ -1,2 +1,9 @@
 # Ignore venv (virtual env) directory 
 venv/
+
+# Ignore pycache files 
+.pytest_cache/
+src/article_summarizer/__pycache__/
+src/article_summarizer/core/__pycache__/
+src/article_summarizer/fetchers/__pycache__
+tests/__pycache__

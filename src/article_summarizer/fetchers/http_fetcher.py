@@ -14,13 +14,14 @@ Implementation details:
 Notes:
 - Heavy cleaning is not done here. It belongs to the Preprocessor.
 - This fetcher is domain-agnostic (works for by-laws, news, blog posts, if they are HTML).
-  PDFs will be handles by a different fetcher.
+  PDFs will be handled by a different fetcher.
 
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from encodings import raw_unicode_escape
 from hashlib import sha1
 from typing import Any, Optional, Tuple
 
@@ -72,18 +73,12 @@ class HttpArticleFetcher:
     def __init__(
         self, 
         *, 
-        timeout: int = 15, 
-        user_agent: Optional[str] = None, 
         min_chars: int = 200,
     ) -> None:
         """
         Args:
-            timeout: Network timeout in seconds used by trafilatura's downloader.
-            user_agent: Optional custom user-agent. If none, trafilatura default is used.
             min_chars: Minimum number of characters required in extracted text to accept it.
         """
-        self.timeout = timeout
-        self.user_agent = user_agent
         self.min_chars = min_chars
     
     
@@ -109,18 +104,15 @@ class HttpArticleFetcher:
         
         
         # Download the page (HTML as string), trafilatura handles basic retries. 
-        downloaded = trafilatura.fetch_url(
-            url,
-            timeout=self.timeout,
-            user_agent=self.user_agent,            
-        )
+        downloaded = trafilatura.fetch_url(url)
         if not downloaded:
-            raise RuntimeError(f"Failed to downloaded content from: {url}")
+            raise RuntimeError(f"Failed to download content from: {url}")
         
         
         # Extract text and metadata.
         # extract_metadata returns keys like: title, authors, date, language, sitename, description
-        meta = trafilatura.extract_metadata(downloaded, url=url) or {}
+        meta = trafilatura.extract_metadata(downloaded) or None
+                
         text = trafilatura.extract(
             downloaded, 
             include_tables=False,
@@ -128,21 +120,37 @@ class HttpArticleFetcher:
             favor_recall=True,
         ) or ""
         
+        def _meta_get(obj, attr: str):
+            """Safely get metadata by attribute name from dict or object, else None."""
+            if obj is None:
+                return None
+            if isinstance(obj, dict):
+                return obj.get(attr)
+            return getattr(obj, attr, None)
+
+         
         clean_text = text.strip()
         if not clean_text:
-            raise RuntimeError(f"Extracted produced empty text for: {url}")
+            raise RuntimeError(f"Extraction produced empty text for: {url}")
         if len(clean_text) < self.min_chars:
             raise RuntimeError(
                 f"Extraction too short ({len(clean_text)} chars) for: {url}"
             )
         
+        # Normalize metadata fields (support dict or object)
+        raw_title = _meta_get(meta, "title")
+        raw_authors = _meta_get(meta, "authors")
+        raw_date = _meta_get(meta, "date")
+        raw_lang = _meta_get(meta, "language")
+        raw_site = _meta_get(meta, "sitename")
+        raw_desc = _meta_get(meta, "description")
         
         # Normalize metadata fields
-        title = (meta.get("title") or None) and str(meta.get("title")).strip()
-        authors = _to_tuple_str(meta.get("authors"))
-        published = _parse_published(meta.get("date"))
-        lang = (meta.get("language") or None) and str(meta.get("language")).strip()
-        source = (meta.get("sitename") or None) and str(meta.get("sitename")).strip()
+        title = (raw_title or None) and str(raw_title).strip()
+        authors = _to_tuple_str(raw_authors)
+        published = _parse_published(raw_date)
+        lang = (raw_lang or None) and str(raw_lang).strip()
+        source = (raw_site or None) and str(raw_site).strip()
         
         
         # Build Article 
@@ -156,7 +164,7 @@ class HttpArticleFetcher:
             lang=lang,
             source=source,
             extra={
-                "description": meta.get("description"),
-                "meta_raw": meta,
+                "description": (raw_desc or None),
+                "meta_raw_type": type(meta).__name__ if meta is not None else None,
             },
         )
